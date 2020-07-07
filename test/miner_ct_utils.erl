@@ -283,15 +283,19 @@ wait_for_app_start(Miners, App, Retries) ->
     ok.
 
 wait_for_app_stop(Miners, App) ->
-    wait_for_app_stop(Miners, App, 60).
+    wait_for_app_stop(Miners, App, 30).
 wait_for_app_stop(Miners, App, Retries) ->
     ?assertAsync(begin
                      Result = lists:all(
                          fun(Miner) ->
                              case ct_rpc:call(Miner, application, which_applications, []) of
-                                 {badrpc, _} ->
+                                 {badrpc, nodedown} ->
+                                     true;
+                                 {badrpc, _Which} ->
+                                     ct:pal("~p ~p", [Miner, _Which]),
                                      false;
                                  Apps ->
+                                     ct:pal("~p ~p", [Miner, Apps]),
                                      not lists:keymember(App, 1, Apps)
                              end
                          end, Miners)
