@@ -256,7 +256,7 @@ wait_for_registration(Miners, Mod, Timeout) ->
                                          P when is_pid(P) ->
                                              true;
                                          Other ->
-                                             ct:pal("Other ~p~n", [Other]),
+                                             ct:pal("~p result ~p~n", [Miner, Other]),
                                      false
                                      end
                              end, Miners)
@@ -825,7 +825,7 @@ make_vars(Keys, Map, Mode) ->
               ?election_restart_interval => 10,
               ?num_consensus_members => 7,
               ?batch_size => 2500,
-              ?vars_commit_delay => 5,
+              ?vars_commit_delay => 1,
               ?var_gw_inactivity_threshold => 20,
               ?block_version => v1,
               ?dkg_curve => 'SS512',

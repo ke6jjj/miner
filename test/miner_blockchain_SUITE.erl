@@ -105,6 +105,7 @@ init_per_testcase(TestCase, Config0) ->
     DKGResults = miner_ct_utils:initial_dkg(Miners, Txns, Addresses, NumConsensusMembers, Curve),
     true = lists:all(fun(Res) -> Res == ok end, DKGResults),
 
+    timer:sleep(500),
     %% Get both consensus and non consensus miners
     {ConsensusMiners, NonConsensusMiners} = miner_ct_utils:miners_by_consensus_state(Miners),
     ct:pal("ConsensusMiners: ~p, NonConsensusMiners: ~p", [ConsensusMiners, NonConsensusMiners]),
@@ -355,11 +356,13 @@ election_multi_test(Config) ->
     BinPub4 = libp2p_crypto:pubkey_to_bin(Pub4),
     BinPub5 = libp2p_crypto:pubkey_to_bin(Pub5),
 
-    Txn6 = vars(#{?use_multi_keys => true}, 4, Priv2),
+    Txn6 = vars(#{?use_multi_keys => true}, 2, Priv),
     _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn6]) || M <- Miners],
 
+    ok = miner_ct_utils:wait_for_chain_var_update(Miners, ?use_multi_keys, true),
+
     Txn7_0 = blockchain_txn_vars_v1:new(
-               #{?num_consensus_members => 7}, 5,
+               #{}, 3,
                #{multi_keys => [BinPub1, BinPub2, BinPub3, BinPub4, BinPub5]}),
     Proofs7 = [blockchain_txn_vars_v1:create_proof(P, Txn7_0)
                || P <- [Priv1, Priv2, Priv3, Priv4, Priv5]],
@@ -368,8 +371,12 @@ election_multi_test(Config) ->
     Txn7 = blockchain_txn_vars_v1:proof(Txn7_1, Proof7),
     _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn7]) || M <- Miners],
 
-    ok = miner_ct_utils:wait_for_chain_var_update(Miners, ?use_multi_keys, true),
     ct:pal("transitioned to multikey"),
+    HChain = ct_rpc:call(hd(Miners), blockchain_worker, blockchain, []),
+    {ok, Height} = ct_rpc:call(hd(Miners), blockchain, height, [HChain]),
+
+    %% let the height go up some more to make sure that the keys are live
+    ok = miner_ct_utils:wait_for_gte(height, Miners, Height + 4),
 
     %% stop the first 4 miners
     TargetMiners = lists:sublist(Miners, 1, 4),
@@ -385,32 +392,32 @@ election_multi_test(Config) ->
     miner_ct_utils:start_miners(Stop),
 
     %% second: make sure we're not making blocks anymore
-    HChain3 = ct_rpc:call(hd(Miners), blockchain_worker, blockchain, []),
-    {ok, Height3} = ct_rpc:call(hd(Miners), blockchain, height, [HChain3]),
+    HChain1 = ct_rpc:call(hd(Miners), blockchain_worker, blockchain, []),
+    {ok, Height1} = ct_rpc:call(hd(Miners), blockchain, height, [HChain1]),
 
     %% height might go up by one, but it should not go up by 5
-    {_, false} = miner_ct_utils:wait_for_gte(height, Miners, Height3 + 5),
+    {_, false} = miner_ct_utils:wait_for_gte(height, Miners, Height1 + 5, any, 20),
 
     [_ | GroupTail] = Addresses,
 
-    {ok, HeadBlock3} = ct_rpc:call(hd(Miners), blockchain, head_block, [HChain3]),
+    {ok, HeadBlock1} = ct_rpc:call(hd(Miners), blockchain, head_block, [HChain1]),
 
-    NewHeight3 = blockchain_block:height(HeadBlock3) + 1,
-    ct:pal("new height is ~p", [NewHeight3]),
-    Hash2 = blockchain_block:hash_block(HeadBlock3),
+    NewHeight = blockchain_block:height(HeadBlock1) + 1,
+    ct:pal("new height is ~p", [NewHeight]),
+    Hash2 = blockchain_block:hash_block(HeadBlock1),
 
-    {ElectionEpoch3, _EpochStart3} = blockchain_block_v1:election_info(HeadBlock3),
-    GrpTxn2 = blockchain_txn_consensus_group_v1:new(GroupTail, <<>>, Height3, 0),
+    {ElectionEpoch1, _EpochStart1} = blockchain_block_v1:election_info(HeadBlock1),
+    GrpTxn2 = blockchain_txn_consensus_group_v1:new(GroupTail, <<>>, NewHeight, 0),
 
     RescueBlock2 =
         blockchain_block_v1:rescue(
                     #{prev_hash => Hash2,
-                      height => NewHeight3,
+                      height => NewHeight,
                       transactions => [GrpTxn2],
-                      hbbft_round => NewHeight3,
+                      hbbft_round => NewHeight,
                       time => erlang:system_time(seconds),
-                      election_epoch => ElectionEpoch3 + 1,
-                      epoch_start => NewHeight3}),
+                      election_epoch => ElectionEpoch1 + 1,
+                      epoch_start => NewHeight}),
 
     EncodedBlock2 = blockchain_block:serialize(
                       blockchain_block_v1:set_signatures(RescueBlock2, [])),
@@ -428,20 +435,25 @@ election_multi_test(Config) ->
     %% now that we have a signed block, cause one of the nodes to
     %% absorb it (and gossip it around)
     FirstNode = hd(Miners),
-    Chain = ct_rpc:call(FirstNode, blockchain_worker, blockchain, []),
-    ct:pal("FirstNode Chain: ~p", [Chain]),
-    Swarm = ct_rpc:call(FirstNode, blockchain_swarm, swarm, []),
-    ct:pal("FirstNode Swarm: ~p", [Swarm]),
+    SecondNode = lists:last(Miners),
+    Chain1 = ct_rpc:call(FirstNode, blockchain_worker, blockchain, []),
+    Chain2 = ct_rpc:call(SecondNode, blockchain_worker, blockchain, []),
     N = length(Miners),
-    ct:pal("N: ~p", [N]),
-    ok = ct_rpc:call(FirstNode, blockchain_gossip_handler, add_block, [SignedBlock, Chain, self(), blockchain_swarm:tid()]),
+    ct:pal("first node ~p second ~pN: ~p", [FirstNode, SecondNode, N]),
+    ok = ct_rpc:call(FirstNode, blockchain_gossip_handler, add_block, [SignedBlock, Chain1, self(), blockchain_swarm:tid()]),
+    ok = ct_rpc:call(SecondNode, blockchain_gossip_handler, add_block, [SignedBlock, Chain2, self(), blockchain_swarm:tid()]),
 
     %% wait until height has increased
-    ok = miner_ct_utils:wait_for_gte(height, Miners, NewHeight3+10),
-
-    ok.
-
-
+    case miner_ct_utils:wait_for_gte(height, Miners, NewHeight + 3, all, 15) of
+        ok -> ok;
+        _ ->
+            [begin
+                 Status = ct_rpc:call(M, miner, hbbft_status, []),
+                 ct:pal("miner ~p, status: ~p", [M, Status])
+             end
+             || M <- Miners],
+            error(rescue_group_made_no_progress)
+    end.
 
 group_change_test(Config) ->
     %% get all the miners
