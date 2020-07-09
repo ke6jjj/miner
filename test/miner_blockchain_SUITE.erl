@@ -444,7 +444,7 @@ election_multi_test(Config) ->
     ok = ct_rpc:call(SecondNode, blockchain_gossip_handler, add_block, [SignedBlock, Chain2, self(), blockchain_swarm:tid()]),
 
     %% wait until height has increased
-    case miner_ct_utils:wait_for_gte(height, Miners, NewHeight + 3, all, 15) of
+    case miner_ct_utils:wait_for_gte(height, Miners, NewHeight + 3) of
         ok -> ok;
         _ ->
             [begin
