@@ -384,7 +384,8 @@ handle_call({create_block, Metadata, Txns, HBBFTRound}, _From, State) ->
                     [],
                     Metadata),
     Ledger = blockchain:ledger(Chain),
-    {ok, N} = blockchain:config(?num_consensus_members, Ledger),
+    {ok, Consensus} = blockchain_ledger_v1:consensus_members(blockchain:ledger(State#state.blockchain)),
+    N = length(Consensus),
     F = ((N - 1) div 3),
 
     %% find a snapshot hash.  if not enabled or we're unable to determine or agree on one, just
@@ -422,7 +423,6 @@ handle_call({create_block, Metadata, Txns, HBBFTRound}, _From, State) ->
         end,
     {Stamps, Hashes} = lists:unzip(StampHashes),
     {SeenVectors, BBAs} = lists:unzip(SeenBBAs),
-    {ok, Consensus} = blockchain_ledger_v1:consensus_members(blockchain:ledger(State#state.blockchain)),
     BBA = process_bbas(length(Consensus), BBAs),
     Reply =
         case process_hashes(Hashes, F) of
